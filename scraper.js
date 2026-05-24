@@ -10,7 +10,7 @@ const CONCURRENCY = 5;
 
 async function runScraper() {
     if (!fs.existsSync(INPUT_FILE)) {
-        console.error(`❌ Arquivo não encontrado: ${INPUT_FILE}`);
+        console.error(`Arquivo não encontrado: ${INPUT_FILE}`);
         return;
     }
 
@@ -22,6 +22,9 @@ async function runScraper() {
     console.log(`Iniciando processamento de ${urls.length} URLs...`);
 
     const extractedData = [];
+    let processedCount = 0;
+    let successCount = 0;
+    const totalUrls = urls.length;
 
     const saveProgress = () => {
         fs.writeFileSync(OUTPUT_FILE, JSON.stringify(extractedData, null, 2), 'utf-8');
@@ -42,37 +45,130 @@ async function runScraper() {
         timeout: 60000, 
     });
 
-    // Tratamento de erros por aba
     cluster.on('taskerror', (err, url) => {
-        console.error(`Falha na URL ${url}: ${err.message}`);
-        extractedData.push({ url, status: 'error', error: err.message });
+        processedCount++;
+        const percent = ((processedCount / totalUrls) * 100).toFixed(1);
+        console.error(`[${processedCount}/${totalUrls}] (${percent}%) Erro: ${err.message}`);
+        extractedData.push({
+            title: null,
+            normal_price: null,
+            discount_price: null,
+            product_url: url,
+            image_url: null,
+            status: 'error',
+            error_message: err.message
+        });
         saveProgress(); 
     });
 
     await cluster.task(async ({ page, data: url }) => {
         await page.setViewport({ width: 1366, height: 768 });
         
-        await page.goto(url, { waitUntil: 'networkidle2' });
+        try {
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            
+            await page.waitForFunction(() => {
+                const modal = document.querySelector('[role="dialog"]');
+                const title = document.querySelector('[data-test-id="product-detail-name"]');
+                const text = document.body.innerText.toLowerCase();
+                const isUnavailable = text.includes('indisponível') || 
+                                      text.includes('não encontramos') || 
+                                      text.includes('esgotado') ||
+                                      text.includes('restaurante fechado');
+                return modal || title || isUnavailable;
+            }, { timeout: 20000 });
+            
+            await new Promise(r => setTimeout(r, 1000));
+        } catch (e) {
+        }
 
         const produto = await page.evaluate(() => {
-            const tituloEl = document.querySelector('h1');
-            const titulo = tituloEl ? tituloEl.innerText.trim() : null;
+            const container = document.querySelector('[role="dialog"]') || document;
 
-            const precosEl = Array.from(document.querySelectorAll('span, p'));
-            const precoMatch = precosEl.find(el => el.innerText.includes('R$'));
-            const preco = precoMatch ? precoMatch.innerText.trim() : null;
+            const titleEl = container.querySelector('[data-test-id="product-detail-name"]') 
+                         || container.querySelector('[data-test-id="item-name"]')
+                         || container.querySelector('.item-title')
+                         || container.querySelector('h2')
+                         || container.querySelector('h3')
+                         || container.querySelector('h1');
+            const title = titleEl ? titleEl.innerText.trim() : null;
 
-            const descEl = document.querySelector('[data-test-id="product-description"], h2 + p');
-            const descricao = descEl ? descEl.innerText.trim() : null;
+            const precosEl = Array.from(container.querySelectorAll('span, p, div, h2, h3'));
+            const validPrices = precosEl.filter(el => {
+                if (!el.innerText) return false;
+                return /^R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}$/.test(el.innerText.trim());
+            });
+            
+            let normal_price = null;
+            let discount_price = null;
 
-            const imgEl = document.querySelector('img[alt*="Imagem do produto"], div[data-test-id="product-image"] img');
-            const imagem = imgEl ? imgEl.src : null;
+            if (validPrices.length > 0) {
+                const strikethrough = validPrices.find(el => {
+                    const style = window.getComputedStyle(el);
+                    return style.textDecorationLine.includes('line-through') || style.textDecoration.includes('line-through');
+                });
+                
+                const normal = validPrices.find(el => {
+                    const style = window.getComputedStyle(el);
+                    return !style.textDecorationLine.includes('line-through') && !style.textDecoration.includes('line-through');
+                });
 
-            return { titulo, descricao, preco, imagem };
+                if (strikethrough && normal) {
+                    normal_price = strikethrough.innerText.trim();
+                    discount_price = normal.innerText.trim();
+                } else if (normal) {
+                    normal_price = normal.innerText.trim();
+                } else if (strikethrough) {
+                    normal_price = strikethrough.innerText.trim();
+                }
+            } else {
+                const precoMatch = precosEl.find(el => el.innerText && el.innerText.includes('R$'));
+                if (precoMatch) normal_price = precoMatch.innerText.trim();
+            }
+
+            const imgElements = Array.from(container.querySelectorAll('img'));
+            const imgEl = imgElements.find(img => img.alt.toLowerCase().includes('produto')) 
+                       || imgElements.find(img => img.width > 50 && img.height > 50) 
+                       || imgElements[0];
+            const image_url = imgEl ? imgEl.src : null;
+
+            const textContent = document.body.innerText.toLowerCase();
+            const isUnavailable = textContent.includes('produto indisponível') 
+                               || textContent.includes('não encontramos') 
+                               || textContent.includes('esgotado') 
+                               || textContent.includes('item indisponível')
+                               || textContent.includes('restaurante fechado');
+
+            return { title, normal_price, discount_price, image_url, isUnavailable };
         });
 
-        console.log(` Extraído: ${produto.titulo || 'Sem título'} | ${preco}`);
-        extractedData.push({ url, status: 'success', ...produto });
+        processedCount++;
+        const percent = ((processedCount / totalUrls) * 100).toFixed(1);
+
+        if (produto.isUnavailable || (!produto.title && !produto.normal_price)) {
+            console.log(`[${processedCount}/${totalUrls}] (${percent}%) ⚠️ Indisponível/Removido: ${url}`);
+            extractedData.push({
+                title: null,
+                normal_price: null,
+                discount_price: null,
+                product_url: url,
+                image_url: null,
+                status: 'error',
+                error_message: 'Produto indisponível ou página não carregada'
+            });
+        } else {
+            successCount++;
+            console.log(`[${processedCount}/${totalUrls}] (${percent}%) ✅ Extraído: ${produto.title || 'Sem título'}`);
+            extractedData.push({
+                title: produto.title,
+                normal_price: produto.normal_price,
+                discount_price: produto.discount_price,
+                product_url: url,
+                image_url: produto.image_url,
+                status: 'success',
+                error_message: null
+            });
+        }
         saveProgress(); 
     });
 
@@ -81,7 +177,9 @@ async function runScraper() {
     await cluster.idle();
     await cluster.close();
 
-    console.log(`\n Extração concluída! Dados salvos em: ${OUTPUT_FILE}`);
+    const finalSuccessRate = processedCount > 0 ? ((successCount / processedCount) * 100).toFixed(1) : '0.0';
+    console.log(`\nExtração concluída! Dados salvos em: ${OUTPUT_FILE}`);
+    console.log(`Resumo: ${successCount} sucessos de ${processedCount} URLs processadas. Taxa de sucesso: ${finalSuccessRate}%`);
 }
 
 runScraper();
