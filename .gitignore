@@ -3,3 +3,4 @@ produtos_extraidos.json
 *.csv
 *.log
 .env
+evidences/
