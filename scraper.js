@@ -19,18 +19,40 @@ async function runScraper() {
         return;
     }
 
+    let extractedData = [];
+    let processedUrls = new Set();
+
+    if (fs.existsSync(OUTPUT_FILE)) {
+        try {
+            const existingData = JSON.parse(fs.readFileSync(OUTPUT_FILE, 'utf-8'));
+            if (Array.isArray(existingData)) {
+                extractedData = existingData;
+                existingData.forEach(item => {
+                    if (item.product_url) processedUrls.add(item.product_url);
+                });
+                console.log(`Retomando execução: ${processedUrls.size} URLs já processadas encontradas.`);
+            }
+        } catch (e) {
+            console.warn('Falha ao ler o arquivo de progresso anterior. Iniciando do zero.');
+        }
+    }
+
     const urls = fs.readFileSync(INPUT_FILE, 'utf-8')
         .split('\n')
         .map(url => url.trim())
-        .filter(url => url.startsWith('http'));
+        .filter(url => url.startsWith('http') && !processedUrls.has(url));
 
-    console.log(`Iniciando processamento de ${urls.length} URLs...`);
+    console.log(`Iniciando processamento de ${urls.length} URLs (restantes na fila)...`);
 
-    const extractedData = [];
     let processedCount = 0;
     let successCount = 0;
     let evidencesSaved = 0;
     const totalUrls = urls.length;
+
+    if (totalUrls === 0) {
+        console.log('Todas as URLs já foram processadas.');
+        return;
+    }
 
     const saveProgress = () => {
         fs.writeFileSync(OUTPUT_FILE, JSON.stringify(extractedData, null, 2), 'utf-8');
