@@ -6,7 +6,7 @@ const { Cluster } = require('puppeteer-cluster');
 
 const INPUT_FILE = path.join(__dirname, 'ifood_urls_padrao_item_1000.csv');
 const OUTPUT_FILE = path.join(__dirname, 'produtos_extraidos.json');
-const CONCURRENCY = 5; 
+const CONCURRENCY = 2; // Reduzido para evitar bloqueio por Rate Limit do Cloudflare
 
 async function runScraper() {
     if (!fs.existsSync(INPUT_FILE)) {
@@ -39,8 +39,8 @@ async function runScraper() {
         maxConcurrency: CONCURRENCY,
         puppeteer: puppeteer,
         puppeteerOptions: {
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         },
         timeout: 60000, 
     });
@@ -64,39 +64,52 @@ async function runScraper() {
     await cluster.task(async ({ page, data: url }) => {
         await page.setViewport({ width: 1366, height: 768 });
         
+        // Obtém a versão real do Chrome do Puppeteer e remove a tag 'Headless' para burlar o WAF
+        const ua = await page.browser().userAgent();
+        await page.setUserAgent(ua.replace('HeadlessChrome', 'Chrome'));
+
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const type = req.resourceType();
+            if (['image', 'media', 'font'].includes(type)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
         try {
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
             
             await page.waitForFunction(() => {
-                const modal = document.querySelector('[role="dialog"]');
-                const title = document.querySelector('[data-test-id="product-detail-name"]');
                 const text = document.body.innerText.toLowerCase();
-                const isUnavailable = text.includes('indisponível') || 
-                                      text.includes('não encontramos') || 
-                                      text.includes('esgotado') ||
-                                      text.includes('restaurante fechado');
-                return modal || title || isUnavailable;
-            }, { timeout: 20000 });
+                const hasPrice = /R\$\s*\d+/.test(text);
+                const hasTitle = document.querySelector('h1, h2, h3');
+                const isError = text.includes('não encontramos') || text.includes('ops!');
+                
+                return (hasPrice && hasTitle) || isError;
+            }, { timeout: 15000 });
             
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 500));
         } catch (e) {
+            console.log(`[Aviso] Bloqueio ou Timeout na página: ${e.message}`);
         }
 
         const produto = await page.evaluate(() => {
-            const container = document.querySelector('[role="dialog"]') || document;
+            const modal = document.querySelector('[role="dialog"], .marmita-modal, .ReactModalPortal');
+            const container = modal || document.querySelector('main') || document;
 
-            const titleEl = container.querySelector('[data-test-id="product-detail-name"]') 
-                         || container.querySelector('[data-test-id="item-name"]')
-                         || container.querySelector('.item-title')
-                         || container.querySelector('h2')
-                         || container.querySelector('h3')
-                         || container.querySelector('h1');
+            // Estrutura genérica para capturar nomes de produtos de mercado
+            let titleEl = container.querySelector('h1');
+            if (!titleEl) titleEl = container.querySelector('h2');
+            if (!titleEl) titleEl = container.querySelector('h3');
+            
             const title = titleEl ? titleEl.innerText.trim() : null;
 
             const precosEl = Array.from(container.querySelectorAll('span, p, div, h2, h3'));
             const validPrices = precosEl.filter(el => {
-                if (!el.innerText) return false;
-                return /^R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}$/.test(el.innerText.trim());
+                if (!el.innerText || el.children.length > 0) return false;
+                return /R\$\s*\d+/.test(el.innerText.trim());
             });
             
             let normal_price = null;
@@ -132,12 +145,7 @@ async function runScraper() {
                        || imgElements[0];
             const image_url = imgEl ? imgEl.src : null;
 
-            const textContent = document.body.innerText.toLowerCase();
-            const isUnavailable = textContent.includes('produto indisponível') 
-                               || textContent.includes('não encontramos') 
-                               || textContent.includes('esgotado') 
-                               || textContent.includes('item indisponível')
-                               || textContent.includes('restaurante fechado');
+            const isUnavailable = !title && !normal_price;
 
             return { title, normal_price, discount_price, image_url, isUnavailable };
         });
@@ -146,7 +154,7 @@ async function runScraper() {
         const percent = ((processedCount / totalUrls) * 100).toFixed(1);
 
         if (produto.isUnavailable || (!produto.title && !produto.normal_price)) {
-            console.log(`[${processedCount}/${totalUrls}] (${percent}%) ⚠️ Indisponível/Removido: ${url}`);
+            console.log(`[${processedCount}/${totalUrls}] (${percent}%) Indisponivel/Removido: ${url}`);
             extractedData.push({
                 title: null,
                 normal_price: null,
@@ -158,7 +166,7 @@ async function runScraper() {
             });
         } else {
             successCount++;
-            console.log(`[${processedCount}/${totalUrls}] (${percent}%) ✅ Extraído: ${produto.title || 'Sem título'}`);
+            console.log(`[${processedCount}/${totalUrls}] (${percent}%) Extraido: ${produto.title || 'Sem titulo'}`);
             extractedData.push({
                 title: produto.title,
                 normal_price: produto.normal_price,
