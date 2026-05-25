@@ -3,10 +3,10 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { Cluster } = require('puppeteer-cluster');
 const path = require('path');
 
-const config = require('./config');
-const FileManager = require('./fileManager');
-const { setupNetworkInterceptor, verifyCloudflareBlock } = require('./interceptor');
-const { extractProductData } = require('./extractor');
+const config = require('./src/config');
+const FileManager = require('./src/fileManager');
+const { setupNetworkInterceptor, verifyCloudflareBlock } = require('./src/interceptor');
+const { extractProductData } = require('./src/extractor');
 
 async function run() {
     const fileManager = new FileManager(config);
