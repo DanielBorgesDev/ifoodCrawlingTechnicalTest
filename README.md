@@ -9,6 +9,20 @@ Solução escalável desenvolvida para extrair dados estruturados de páginas de
 3. **Mecanismo de Retentativas (Retries)**: Cada URL pode falhar por instabilidade de rede ou bloqueios severos. O Cluster automaticamente tenta recolocar a URL na fila em caso de falha de conexão (até 3 tentativas por link).
 4. **Otimização de Carregamento**: O script intercepta a rede e bloqueia o download de mídias pesadas (`image`, `media`, `font`, `stylesheet`), economizando banda e processamento, o que diminui drastically o tempo médio por URL.
 5. **Evidências Fotográficas**: Em caso de falha não tratável ou na captura das primeiras páginas de sucesso, um screenshot é salvo no diretório `evidences/`.
+6. **Retomada de Processamento (Resume)**: O script lê o arquivo `produtos_extraidos.json` na inicialização e pula automaticamente as URLs que já foram processadas.
+
+## Métricas e Avaliação de Sucesso
+
+O sistema foi arquitetado para atingir a meta mínima de **95% de taxa de sucesso**. O cálculo é realizado internamente no final da execução utilizando a fórmula:
+```text
+Taxa de Sucesso = (Quantidade de URLs processadas com sucesso / Total de URLs processadas) * 100
+```
+
+### Tratamento de URLs Inválidas ou Produtos Indisponíveis
+Páginas que exibem avisos como "Produto não encontrado", "Página indisponível" ou em que a estrutura HTML do produto foi completamente removida **não geram quebra do sistema**.
+Esses casos são interceptados, ignorados na contagem de "sucesso", mas devidamente registrados no arquivo final de saída para manter a integridade dos dados, recebendo a marcação:
+- `"status": "error"`
+- `"error_message": "Produto indisponível ou estrutura da página não reconhecida"`
 
 ## Estrutura do Output
 Os produtos processados são salvos incrementalmente no arquivo `produtos_extraidos.json`, com a seguinte estrutura:
