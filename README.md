@@ -10,6 +10,7 @@ Solução escalável desenvolvida para extrair dados estruturados de páginas de
 4. **Otimização de Carregamento**: O script intercepta a rede e bloqueia o download de mídias pesadas (`image`, `media`, `font`, `stylesheet`), economizando banda e processamento, o que diminui drastically o tempo médio por URL.
 5. **Evidências Fotográficas**: Em caso de falha não tratável ou na captura das primeiras páginas de sucesso, um screenshot é salvo no diretório `evidences/`.
 6. **Retomada de Processamento (Resume)**: O script lê o arquivo `produtos_extraidos.json` na inicialização e pula automaticamente as URLs que já foram processadas.
+7. **Arquitetura Modular**: O código foi completamente componentizado. A raiz possui apenas o orquestrador `scraper.js`, enquanto a lógica pesada reside na pasta `src/` (isolando configurações, validações de rede, extração de DOM e manipulação de arquivos).
 
 ## Métricas e Avaliação de Sucesso
 
